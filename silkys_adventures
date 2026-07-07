@@ -1,0 +1,808 @@
+<!DOCTYPE html> <html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Silky's Adventures</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+background: #0a1628;
+display: flex; flex-direction: column;
+align-items: center; justify-content: center;
+min-height: 100vh;
+font-family: 'Segoe UI', Arial, sans-serif;
+}
+canvas {
+border: 3px solid #2E86AB;
+box-shadow: 0 0 30px #2E86AB88;
+cursor: default;
+display: block;
+}
+#info {
+color: #87CEEB; font-size: 13px; margin-top: 8px;
+text-align: center; opacity: 0.7;
+}
+</style>
+</head>
+<body>
+<canvas id="gameCanvas" width="640" height="480"></canvas>
+<div id="info">Arrow Keys / WASD to move &nbsp;|&nbsp; E or Space to talk &nbsp;|&nbsp; Click quiz answers</div>
+<script>
+// ============================================================
+// SILKY'S ADVENTURES – Plymouth Beach Edition
+// English A1 · Klasse 6 Gymnasium Bayern
+// ============================================================
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+// ── GAME STATE ───────────────────────────────────────────────
+const STATE = { MENU:0, PLAYING:1, DIALOGUE:2, QUIZ:3, WIN:4 };
+let state = STATE.MENU;
+// ── TIMING ───────────────────────────────────────────────────
+let frame = 0;
+let blinkTimer = 0;
+// ── INPUT ────────────────────────────────────────────────────
+const keys = {};
+let justPressedE = false;
+let justPressedEnter = false;
+document.addEventListener('keydown', e => {
+if (!keys[e.code]) {
+if (e.code === 'KeyE' || e.code === 'Space') justPressedE = true;
+if (e.code === 'Enter') justPressedEnter = true;
+}
+keys[e.code] = true;
+if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.code] = false; });
+// ── TILE MAP ─────────────────────────────────────────────────
+// 0=deep water 1=shallow water 2=wet sand 3=sand
+// 4=promenade 5=grass 6=rock 7=flower
+const TILE_SIZE = 32;
+const MAP_COLS = 20;
+const MAP_ROWS = 15;
+const mapData = [
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
+[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],
+[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],
+[3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3,3],
+[4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4,4],
+[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,6,6,6],
+[5,7,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,6,6,6],
+[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,6,6,6],
+[5,5,7,5,5,5,5,5,5,5,5,5,5,5,7,5,5,5,5,5],
+[5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+[6,6,6,5,5,5,5,5,5,5,5,5,5,5,5,5,6,6,6,6]
+];
+const SOLID = new Set([0,1,6]);
+// ── CAMERA ───────────────────────────────────────────────────
+const cam = { x:0, y:0 };
+function updateCamera(px, py) {
+cam.x = Math.max(0, Math.min(px - 320, MAP_COLSTILE_SIZE - 640));
+cam.y = Math.max(0, Math.min(py - 240, MAP_ROWSTILE_SIZE - 480));
+}
+// ── PLAYER ───────────────────────────────────────────────────
+const player = {
+x: 10TILE_SIZE + 16, y: 7TILE_SIZE + 16,
+w: 28, h: 28,
+speed: 2,
+dir: 0, // 0=down 1=up 2=left 3=right
+moving: false,
+stars: parseInt(localStorage.getItem('silkyStars')||'0'),
+hearts: 3
+};
+function playerTileCollide(nx, ny) {
+const hw = 10, hh = 10;
+const corners = [
+[nx-hw, ny-hh], [nx+hw, ny-hh],
+[nx-hw, ny+hh], [nx+hw, ny+hh]
+];
+for (const [cx,cy] of corners) {
+const tc = Math.floor(cx/TILE_SIZE);
+const tr = Math.floor(cy/TILE_SIZE);
+if (tr<0||tr>=MAP_ROWS||tc<0||tc>=MAP_COLS) return true;
+if (SOLID.has(mapData[tr][tc])) return true;
+}
+return false;
+}
+function movePlayer() {
+let dx=0, dy=0;
+if (keys['ArrowUp'] || keys['KeyW']) { dy=-1; player.dir=1; }
+if (keys['ArrowDown'] || keys['KeyS']) { dy= 1; player.dir=0; }
+if (keys['ArrowLeft'] || keys['KeyA']) { dx=-1; player.dir=2; }
+if (keys['ArrowRight'] || keys['KeyD']) { dx= 1; player.dir=3; }
+player.moving = (dx!==0||dy!==0);
+if (dx!==0&&dy!==0) { dx*=0.707; dy*=0.707; }
+const spd = player.speed;
+const nx = player.x + dxspd;
+const ny = player.y + dyspd;
+if (!playerTileCollide(nx, player.y)) player.x = nx;
+if (!playerTileCollide(player.x, ny)) player.y = ny;
+}
+// ── NPCs ─────────────────────────────────────────────────────
+const npcs = [
+{
+id:'sam', name:'Sam', x:5TILE_SIZE+16, y:6TILE_SIZE+16,
+shirt:'#E74C3C', hair:'#8B4513', done:false,
+greeting:"Hey! 😄 Why did the seal go to school?\nBecause it wanted to be SMART!\nNow let's practice the verb TO BE!",
+grammarTip:"Use AM with I,\nIS with he / she / it,\nARE with you / we / they.",
+questions:[
+{q:"Silky ___ a seal.", opts:["am","is","are"], ans:1, exp:"He/she/it → IS"},
+{q:"Sam and Leo ___ friends.", opts:["am","is","are"], ans:2, exp:"They → ARE"},
+{q:"I ___ happy today!", opts:["am","is","are"], ans:0, exp:"I → AM"}
+]
+},
+{
+id:'justin', name:'Justin', x:10TILE_SIZE+16, y:9TILE_SIZE+16,
+shirt:'#2980B9', hair:'#111111', done:false,
+greeting:"Action! 🎬 I'm filming Plymouth!\nLet's check your action verbs!\nRemember: he/she/it gets an -S!",
+grammarTip:"Simple Present: add -S or -ES\nfor he, she, it.\nExample: she play→ she plays.",
+questions:[
+{q:"She ___ football every day.", opts:["play","plays","playing"], ans:1, exp:"She → plays (add -s)"},
+{q:"He ___ to school by bus.", opts:["go","goes","going"], ans:1, exp:"He → goes (add -es)"},
+{q:"My camera ___ great videos!", opts:["make","makes","making"], ans:1, exp:"It → makes (add -s)"}
+]
+},
+{
+id:'abby', name:'Abby', x:14TILE_SIZE+16, y:6TILE_SIZE+16,
+shirt:'#E91E8C', hair:'#FFD700', done:false,
+greeting:"🎵 La la la! I have a song for you!\nToday we practise HAVE and HAS!\nListen carefully! 🎶",
+grammarTip:"Use HAVE with I / you / we / they.\nUse HAS with he / she / it.",
+questions:[
+{q:"I ___ a red umbrella.", opts:["have","has","is"], ans:0, exp:"I → HAVE"},
+{q:"Silky ___ big brown eyes.", opts:["have","has","is"], ans:1, exp:"She/it → HAS"},
+{q:"We ___ a great teacher!", opts:["have","has","are"], ans:0, exp:"We → HAVE"}
+]
+},
+{
+id:'maya', name:'Maya', x:3TILE_SIZE+16, y:4TILE_SIZE+16,
+shirt:'#8E44AD', hair:'#2C1810', done:false,
+greeting:"⛵ When I sail, I see so much!\nLet me teach you THERE IS\nand THERE ARE!",
+grammarTip:"THERE IS = one thing.\nTHERE ARE = more than one thing.",
+questions:[
+{q:"___ a lighthouse near the beach.", opts:["There is","There are","There be"], ans:0, exp:"One lighthouse → THERE IS"},
+{q:"___ many fish in the sea.", opts:["There is","There are","There be"], ans:1, exp:"Many fish → THERE ARE"},
+{q:"___ a boat on the water.", opts:["There is","There are","Is there"], ans:0, exp:"One boat → THERE IS"}
+]
+},
+{
+id:'leo', name:'Leo', x:8TILE_SIZE+16, y:11TILE_SIZE+16,
+shirt:'#27AE60', hair:'#4A0080', done:false,
+greeting:"💃 I am dancing right now!\nCan you use -ING forms too?\nLet's move and learn! 🕺",
+grammarTip:"Present Progressive:\nam / is / are + verb-ING.\nShows what is happening NOW.",
+questions:[
+{q:"Silky ___ on the beach. (play)", opts:["is playing","is plays","are playing"], ans:0, exp:"Silky (she) → IS PLAYING"},
+{q:"Leo ___ to the music. (dance)", opts:["is dancing","is dance","are dancing"], ans:0, exp:"Leo (he) → IS DANCING"},
+{q:"We ___ at the sea. (look)", opts:["are looking","is looking","are looks"], ans:0, exp:"We → ARE LOOKING"}
+]
+}
+];
+// ── DIALOGUE STATE ────────────────────────────────────────────
+let activeNPC = null;
+let dlgPhase = 0; // 0=greeting 1=tip 2=quiz
+let quizIndex = 0;
+let quizResult = null; // null | 'correct' | 'wrong'
+let quizExp = '';
+let quizFlash = 0;
+let quizEarned = 0;
+let dlgPage = 0; // for multi-page greeting/tip
+// ── DECORATIONS ───────────────────────────────────────────────
+const seagulls = [
+{x:50, y:60, spd:0.4},
+{x:300, y:40, spd:0.3},
+{x:500, y:80, spd:0.5}
+];
+const clouds = [
+{x:80, y:30, w:90, h:35, spd:0.15},
+{x:350, y:20, w:110,h:40, spd:0.10},
+{x:550, y:50, w:80, h:30, spd:0.20}
+];
+let lighthouseAngle = 0;
+let waterPulse = 0;
+// ── QUIZ BUTTON RECTS (screen coords) ────────────────────────
+const qBtns = [
+{x:60, y:390, w:160, h:36},
+{x:240, y:390, w:160, h:36},
+{x:420, y:390, w:160, h:36}
+];
+let hoveredBtn = -1;
+canvas.addEventListener('mousemove', e => {
+if (state !== STATE.QUIZ) { hoveredBtn=-1; return; }
+const r = canvas.getBoundingClientRect();
+const mx = e.clientX - r.left;
+const my = e.clientY - r.top;
+hoveredBtn = -1;
+qBtns.forEach((b,i) => {
+if (mx>=b.x&&mx<=b.x+b.w&&my>=b.y&&my<=b.y+b.h) hoveredBtn=i;
+});
+});
+canvas.addEventListener('click', e => {
+const r = canvas.getBoundingClientRect();
+const mx = e.clientX - r.left;
+const my = e.clientY - r.top;
+if (state === STATE.MENU) { startGame(); return; }
+if (state === STATE.WIN) { resetGame(); return; }
+if (state === STATE.DIALOGUE) {
+// click anywhere advances dialogue
+advanceDialogue();
+return;
+}
+if (state === STATE.QUIZ && quizResult === null) {
+qBtns.forEach((b,i) => {
+if (mx>=b.x&&mx<=b.x+b.w&&my>=b.y&&my<=b.y+b.h) selectAnswer(i);
+});
+} else if (state === STATE.QUIZ && quizResult !== null) {
+nextQuizStep();
+}
+});
+// ── HELPERS ───────────────────────────────────────────────────
+function wrapText(ctx, text, x, y, maxW, lineH) {
+const lines = text.split('\n');
+lines.forEach(line => {
+const words = line.split(' ');
+let cur = '';
+words.forEach(w => {
+const test = cur ? cur+' '+w : w;
+if (ctx.measureText(test).width > maxW && cur) {
+ctx.fillText(cur, x, y); y += lineH; cur = w;
+} else cur = test;
+});
+ctx.fillText(cur, x, y); y += lineH;
+});
+return y;
+}
+// ── DRAWING: TILES ────────────────────────────────────────────
+function drawTile(id, px, py) {
+const pulse = Math.sin(waterPulse)0.5+0.5;
+switch(id) {
+case 0: // deep water
+ctx.fillStyle = rgb(${Math.round(26+pulse*20)},${Math.round(111+pulse*20)},${Math.round(168+pulse*10)});
+ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+if ((Math.floor(px/TILE_SIZE)+Math.floor(py/TILE_SIZE))%3===0) {
+ctx.fillStyle='rgba(255,255,255,0.15)';
+ctx.fillRect(px+4,py+14,12,2); ctx.fillRect(px+18,py+20,8,2);
+}
+break;
+case 1: // shallow water
+ctx.fillStyle='#5BA4CF';
+ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+ctx.fillStyle='rgba(255,255,255,0.4)';
+for(let i=0;i<3;i++) ctx.fillRect(px+4+i9,py+12+i4,6,2);
+break;
+case 2: // wet sand
+ctx.fillStyle='#C8A96E';
+ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+ctx.fillStyle='rgba(255,255,255,0.2)';
+ctx.fillRect(px,py,TILE_SIZE,4);
+break;
+case 3: // sand
+ctx.fillStyle='#F4D03F';
+ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+ctx.fillStyle='rgba(200,160,80,0.3)';
+ctx.fillRect(px+8,py+8,4,4); ctx.fillRect(px+20,py+18,3,3);
+break;
+case 4: // promenade
+ctx.fillStyle='#95A5A6';
+ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+ctx.fillStyle='rgba(255,255,255,0.1)';
+ctx.fillRect(px,py,TILE_SIZE,2);
+break;
+case 5: // grass
+ctx.fillStyle='#52B788';
+ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+break;
+case 6: // rock
+ctx.fillStyle='#7F8C8D';
+ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+ctx.fillStyle='#6C7A7D';
+ctx.fillRect(px+4,py+4,10,8); ctx.fillRect(px+16,py+10,10,8);
+break;
+case 7: // flower
+ctx.fillStyle='#52B788';
+ctx.fillRect(px,py,TILE_SIZE,TILE_SIZE);
+ctx.fillStyle='#FF6B9D';
+ctx.beginPath(); ctx.arc(px+16,py+16,4,0,Math.PI2); ctx.fill();
+ctx.fillStyle='#FFE066';
+ctx.beginPath(); ctx.arc(px+16,py+16,2,0,Math.PI*2); ctx.fill();
+break;
+}
+}
+function drawMap() {
+for (let r=0;r<MAP_ROWS;r++) {
+for (let c=0;c<MAP_COLS;c++) {
+const px = cTILE_SIZE - cam.x;
+const py = rTILE_SIZE - cam.y;
+if (px>-TILE_SIZE&&px<640&&py>-TILE_SIZE&&py<480)
+drawTile(mapData[r][c], px, py);
+}
+}
+}
+// ── DRAWING: LIGHTHOUSE ───────────────────────────────────────
+function drawLighthouse() {
+const lx = 18TILE_SIZE - cam.x;
+const ly = 9TILE_SIZE - cam.y;
+// base
+ctx.fillStyle='#BDC3C7';
+ctx.fillRect(lx+8,ly+64,16,16);
+// tower
+ctx.fillStyle='#ECF0F1';
+ctx.fillRect(lx+10,ly+10,12,56);
+// stripes
+ctx.fillStyle='#E74C3C';
+ctx.fillRect(lx+10,ly+20,12,8);
+ctx.fillRect(lx+10,ly+40,12,8);
+// top
+ctx.fillStyle='#E74C3C';
+ctx.beginPath(); ctx.arc(lx+16,ly+10,8,0,Math.PI*2); ctx.fill();
+// beam
+ctx.save();
+ctx.translate(lx+16, ly+10);
+ctx.rotate(lighthouseAngle);
+const grad = ctx.createLinearGradient(0,0,80,0);
+grad.addColorStop(0,'rgba(255,255,200,0.6)');
+grad.addColorStop(1,'rgba(255,255,200,0)');
+ctx.fillStyle=grad;
+ctx.beginPath();
+ctx.moveTo(0,0);
+ctx.lineTo(80,-12);
+ctx.lineTo(80,12);
+ctx.closePath();
+ctx.fill();
+ctx.restore();
+}
+// ── DRAWING: DECORATIONS ──────────────────────────────────────
+function drawDecorations() {
+// clouds (fixed to screen)
+clouds.forEach(cl => {
+ctx.fillStyle='rgba(255,255,255,0.85)';
+ctx.beginPath(); ctx.ellipse(cl.x,cl.y,cl.w/2,cl.h/2,0,0,Math.PI2); ctx.fill();
+ctx.beginPath(); ctx.ellipse(cl.x-20,cl.y+5,cl.w/3,cl.h/3,0,0,Math.PI2); ctx.fill();
+ctx.beginPath(); ctx.ellipse(cl.x+22,cl.y+5,cl.w/3,cl.h/3,0,0,Math.PI*2); ctx.fill();
+});
+// seagulls (fixed to screen)
+seagulls.forEach(sg => {
+ctx.strokeStyle='#555'; ctx.lineWidth=1.5;
+ctx.beginPath();
+ctx.moveTo(sg.x-8,sg.y); ctx.quadraticCurveTo(sg.x-4,sg.y-5,sg.x,sg.y);
+ctx.quadraticCurveTo(sg.x+4,sg.y-5,sg.x+8,sg.y);
+ctx.stroke();
+});
+}
+// ── DRAWING: SILKY ────────────────────────────────────────────
+function drawSilky(sx, sy) {
+const bob = player.moving ? Math.sin(frame*0.18)2 : Math.sin(frame0.06)*1;
+const x = sx; const y = sy + bob;
+// shadow
+ctx.fillStyle='rgba(0,0,0,0.15)';
+ctx.beginPath(); ctx.ellipse(x,y+13,12,4,0,0,Math.PI*2); ctx.fill();
+// body
+ctx.fillStyle='#FFFFFF';
+ctx.beginPath(); ctx.ellipse(x,y+4,13,10,0,0,Math.PI2); ctx.fill();
+ctx.fillStyle='#4A90D9';
+ctx.beginPath(); ctx.ellipse(x,y+2,10,8,0,0,Math.PI2); ctx.fill();
+// tail
+ctx.fillStyle='#FFFFFF';
+ctx.beginPath();
+ctx.moveTo(x-6,y+12); ctx.lineTo(x,y+18); ctx.lineTo(x+6,y+12);
+ctx.closePath(); ctx.fill();
+ctx.fillStyle='#4A90D9';
+ctx.beginPath();
+ctx.moveTo(x-4,y+12); ctx.lineTo(x,y+16); ctx.lineTo(x+4,y+12);
+ctx.closePath(); ctx.fill();
+// flippers
+ctx.fillStyle='#FFFFFF';
+ctx.beginPath(); ctx.ellipse(x-14,y+4,5,3,-0.4,0,Math.PI2); ctx.fill();
+ctx.beginPath(); ctx.ellipse(x+14,y+4,5,3,0.4,0,Math.PI2); ctx.fill();
+// head
+ctx.fillStyle='#FFFFFF';
+ctx.beginPath(); ctx.arc(x,y-8,11,0,Math.PI2); ctx.fill();
+ctx.fillStyle='#4A90D9';
+ctx.beginPath(); ctx.arc(x,y-9,8,0,Math.PI2); ctx.fill();
+// eyes
+const eyeOff = player.dir===2 ? -3 : player.dir===3 ? 3 : 0;
+ctx.fillStyle='#1a1a1a';
+ctx.beginPath(); ctx.arc(x-4+eyeOff,y-10,2.5,0,Math.PI2); ctx.fill();
+ctx.beginPath(); ctx.arc(x+4+eyeOff,y-10,2.5,0,Math.PI2); ctx.fill();
+ctx.fillStyle='white';
+ctx.beginPath(); ctx.arc(x-3+eyeOff,y-11,1,0,Math.PI2); ctx.fill();
+ctx.beginPath(); ctx.arc(x+5+eyeOff,y-11,1,0,Math.PI2); ctx.fill();
+// nose
+ctx.fillStyle='#2C1810';
+ctx.beginPath(); ctx.ellipse(x+eyeOff,y-6,3,2,0,0,Math.PI*2); ctx.fill();
+// whiskers
+ctx.strokeStyle='rgba(255,255,255,0.8)'; ctx.lineWidth=1;
+[-1,1].forEach(side => {
+for(let i=0;i<3;i++) {
+ctx.beginPath();
+ctx.moveTo(x+eyeOff, y-6+i2);
+ctx.lineTo(x+eyeOff+side14, y-7+i*2);
+ctx.stroke();
+}
+});
+}
+// ── DRAWING: NPC ──────────────────────────────────────────────
+function drawNPC(npc) {
+const sx = npc.x - cam.x;
+const sy = npc.y - cam.y;
+if (sx<-40||sx>680||sy<-40||sy>520) return;
+const bob = Math.sin(frame*0.05+npc.x)*1.5;
+// shadow
+ctx.fillStyle='rgba(0,0,0,0.12)';
+ctx.beginPath(); ctx.ellipse(sx,sy+22,10,3,0,0,Math.PI*2); ctx.fill();
+// legs
+ctx.fillStyle='#5D4037';
+ctx.fillRect(sx-6,sy+10,8,14);
+ctx.fillRect(sx+0,sy+10,8,14);
+// body / shirt
+ctx.fillStyle=npc.shirt;
+ctx.fillRect(sx-10,sy-8+bob,20,20);
+// arms
+ctx.fillStyle=npc.shirt;
+ctx.fillRect(sx-16,sy-6+bob,7,12);
+ctx.fillRect(sx+10,sy-6+bob,7,12);
+// head
+ctx.fillStyle='#FDBCB4';
+ctx.beginPath(); ctx.arc(sx,sy-16+bob,11,0,Math.PI*2); ctx.fill();
+// hair
+ctx.fillStyle=npc.hair;
+ctx.beginPath(); ctx.arc(sx,sy-22+bob,9,Math.PI,0); ctx.fill();
+ctx.fillRect(sx-9,sy-22+bob,18,5);
+// eyes
+ctx.fillStyle='#1a1a1a';
+ctx.beginPath(); ctx.arc(sx-4,sy-17+bob,2,0,Math.PI2); ctx.fill();
+ctx.beginPath(); ctx.arc(sx+4,sy-17+bob,2,0,Math.PI2); ctx.fill();
+// smile
+ctx.strokeStyle='#8B4513'; ctx.lineWidth=1.5;
+ctx.beginPath();
+ctx.arc(sx,sy-12+bob,4,0.2,Math.PI-0.2);
+ctx.stroke();
+// special accessories
+if (npc.id==='justin') {
+// camera
+ctx.fillStyle='#333';
+ctx.fillRect(sx+10,sy-4+bob,10,7);
+ctx.fillStyle='#555';
+ctx.beginPath(); ctx.arc(sx+15,sy-1+bob,3,0,Math.PI*2); ctx.fill();
+}
+if (npc.id==='abby') {
+// music notes
+ctx.fillStyle='#FF69B4';
+ctx.font='12px serif';
+ctx.fillText('♪',sx-18,sy-20+bob);
+ctx.fillText('♫',sx+12,sy-24+bob);
+}
+if (npc.id==='leo') {
+// dance pose - one arm up
+ctx.fillStyle=npc.shirt;
+ctx.fillRect(sx+10,sy-18+bob,7,12);
+}
+if (npc.id==='maya') {
+// small sail shape
+ctx.fillStyle='white';
+ctx.beginPath();
+ctx.moveTo(sx-18,sy-4+bob);
+ctx.lineTo(sx-18,sy-18+bob);
+ctx.lineTo(sx-10,sy-4+bob);
+ctx.closePath(); ctx.fill();
+}
+// "done" checkmark
+if (npc.done) {
+ctx.fillStyle='#2ECC71';
+ctx.font='bold 14px sans-serif';
+ctx.fillText('✓',sx-5,sy-32+bob);
+}
+// proximity hint
+const dist = Math.hypot(player.x-npc.x, player.y-npc.y);
+if (dist<52 && state===STATE.PLAYING) {
+ctx.fillStyle='rgba(0,0,0,0.7)';
+ctx.beginPath();
+const hw=60, hh=18;
+roundRect(ctx, sx-hw/2, sy-52+bob, hw, hh, 6);
+ctx.fill();
+ctx.fillStyle='#FFE066';
+ctx.font='11px sans-serif';
+ctx.textAlign='center';
+ctx.fillText('Press E to talk', sx, sy-39+bob);
+ctx.textAlign='left';
+}
+}
+function roundRect(ctx,x,y,w,h,r){
+ctx.beginPath();
+ctx.moveTo(x+r,y);
+ctx.lineTo(x+w-r,y); ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+ctx.lineTo(x+w,y+h-r); ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+ctx.lineTo(x+r,y+h); ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+ctx.lineTo(x,y+r); ctx.quadraticCurveTo(x,y,x+r,y);
+ctx.closePath();
+}
+// ── DRAWING: HUD ──────────────────────────────────────────────
+function drawHUD() {
+// stars
+ctx.fillStyle='#FFE066';
+ctx.font='bold 20px sans-serif';
+ctx.fillText('⭐ '+player.stars, 12, 30);
+// hearts
+ctx.textAlign='right';
+ctx.fillStyle='#E74C3C';
+ctx.fillText('❤️'.repeat(player.hearts), 628, 30);
+ctx.textAlign='left';
+// location
+ctx.fillStyle='rgba(0,0,0,0.5)';
+roundRect(ctx,8,448,160,24,6); ctx.fill();
+ctx.fillStyle='white'; ctx.font='13px sans-serif';
+ctx.fillText('📍 Plymouth Beach', 14, 464);
+}
+// ── DRAWING: DIALOGUE BOX ─────────────────────────────────────
+function drawDialogueBox() {
+if (!activeNPC) return;
+const npc = activeNPC;
+// box
+ctx.fillStyle='rgba(0,0,0,0.88)';
+roundRect(ctx,10,330,620,140,10); ctx.fill();
+ctx.strokeStyle=npc.shirt; ctx.lineWidth=2;
+roundRect(ctx,10,330,620,140,10); ctx.stroke();
+// portrait circle
+ctx.fillStyle=npc.shirt;
+ctx.beginPath(); ctx.arc(55,370,30,0,Math.PI2); ctx.fill();
+ctx.fillStyle='#FDBCB4';
+ctx.beginPath(); ctx.arc(55,362,14,0,Math.PI2); ctx.fill();
+ctx.fillStyle=npc.hair;
+ctx.beginPath(); ctx.arc(55,356,12,Math.PI,0); ctx.fill();
+ctx.fillStyle='#1a1a1a';
+ctx.beginPath(); ctx.arc(51,363,2,0,Math.PI2); ctx.fill();
+ctx.beginPath(); ctx.arc(59,363,2,0,Math.PI2); ctx.fill();
+// name
+ctx.fillStyle=npc.shirt;
+ctx.font='bold 15px sans-serif';
+ctx.fillText(npc.name, 95, 352);
+// text
+ctx.fillStyle='white'; ctx.font='14px sans-serif';
+const text = dlgPhase===0 ? npc.greeting : npc.grammarTip;
+wrapText(ctx, text, 95, 370, 520, 20);
+// continue hint
+blinkTimer++;
+if (Math.floor(blinkTimer/30)%2===0) {
+ctx.fillStyle='#87CEEB'; ctx.font='12px sans-serif';
+ctx.textAlign='right';
+ctx.fillText('Press E to continue ▶', 625, 462);
+ctx.textAlign='left';
+}
+}
+// ── DRAWING: QUIZ ─────────────────────────────────────────────
+function drawQuiz() {
+if (!activeNPC) return;
+const npc = activeNPC;
+const q = npc.questions[quizIndex];
+// box
+ctx.fillStyle='rgba(0,0,0,0.92)';
+roundRect(ctx,10,300,620,170,10); ctx.fill();
+ctx.strokeStyle=npc.shirt; ctx.lineWidth=2;
+roundRect(ctx,10,300,620,170,10); ctx.stroke();
+// portrait
+ctx.fillStyle=npc.shirt;
+ctx.beginPath(); ctx.arc(55,340,28,0,Math.PI2); ctx.fill();
+ctx.fillStyle='#FDBCB4';
+ctx.beginPath(); ctx.arc(55,333,12,0,Math.PI2); ctx.fill();
+ctx.fillStyle=npc.hair;
+ctx.beginPath(); ctx.arc(55,328,11,Math.PI,0); ctx.fill();
+// question number
+ctx.fillStyle=npc.shirt;
+ctx.font='bold 13px sans-serif';
+ctx.fillText(${npc.name} – Question ${quizIndex+1}/3, 95, 320);
+// question text
+ctx.fillStyle='white'; ctx.font='bold 16px sans-serif';
+ctx.fillText(q.q, 95, 345);
+// grammar tip mini
+ctx.fillStyle='#87CEEB'; ctx.font='12px sans-serif';
+ctx.fillText('💡 '+npc.grammarTip.split('\n')[0], 95, 365);
+if (quizResult === null) {
+// answer buttons
+q.opts.forEach((opt,i) => {
+const b = qBtns[i];
+const hov = hoveredBtn===i;
+ctx.fillStyle = hov ? '#2980B9' : '#1a3a5c';
+roundRect(ctx,b.x,b.y,b.w,b.h,8); ctx.fill();
+ctx.strokeStyle = hov ? '#5DADE2' : '#2E86AB';
+ctx.lineWidth=2;
+roundRect(ctx,b.x,b.y,b.w,b.h,8); ctx.stroke();
+ctx.fillStyle='white'; ctx.font='bold 15px sans-serif';
+ctx.textAlign='center';
+ctx.fillText(opt, b.x+b.w/2, b.y+24);
+ctx.textAlign='left';
+});
+} else {
+// feedback
+const correct = quizResult==='correct';
+ctx.fillStyle = correct ? 'rgba(46,204,113,0.3)' : 'rgba(231,76,60,0.3)';
+roundRect(ctx,60,385,520,60,8); ctx.fill();
+ctx.fillStyle = correct ? '#2ECC71' : '#E74C3C';
+ctx.font='bold 18px sans-serif';
+ctx.textAlign='center';
+ctx.fillText(correct ? '✅ Correct! Well done!' : '❌ Not quite...', 320, 410);
+ctx.fillStyle='white'; ctx.font='14px sans-serif';
+ctx.fillText('💡 '+quizExp, 320, 432);
+ctx.fillStyle='#87CEEB'; ctx.font='12px sans-serif';
+ctx.fillText('Click to continue', 320, 455);
+ctx.textAlign='left';
+}
+}
+// ── DRAWING: MENU ─────────────────────────────────────────────
+function drawMenu() {
+// sky
+const skyGrad = ctx.createLinearGradient(0,0,0,480);
+skyGrad.addColorStop(0,'#87CEEB');
+skyGrad.addColorStop(0.6,'#B0E0FF');
+skyGrad.addColorStop(1,'#F4D03F');
+ctx.fillStyle=skyGrad; ctx.fillRect(0,0,640,480);
+// ocean
+ctx.fillStyle='#2E86AB';
+ctx.fillRect(0,300,640,180);
+ctx.fillStyle='rgba(255,255,255,0.3)';
+for(let i=0;i<5;i++) ctx.fillRect(i130+((frame0.5)%130),310,80,4);
+// clouds
+drawDecorations();
+// title box
+ctx.fillStyle='rgba(0,0,0,0.45)';
+roundRect(ctx,80,60,480,100,16); ctx.fill();
+ctx.fillStyle='#FFE066';
+ctx.font='bold 46px sans-serif';
+ctx.textAlign='center';
+ctx.shadowColor='#000'; ctx.shadowBlur=8;
+ctx.fillText("Silky's Adventures", 320, 120);
+ctx.shadowBlur=0;
+ctx.fillStyle='white'; ctx.font='18px sans-serif';
+ctx.fillText('An English Adventure in Plymouth! 🏖️', 320, 148);
+// animated Silky on menu
+const menuSilkyY = 230 + Math.sin(frame*0.06)*6;
+drawSilky(320, menuSilkyY);
+// start prompt
+if (Math.floor(frame/35)%2===0) {
+ctx.fillStyle='white'; ctx.font='bold 18px sans-serif';
+ctx.fillText('Press ENTER or click to Start', 320, 310);
+}
+ctx.fillStyle='rgba(255,255,255,0.6)'; ctx.font='13px sans-serif';
+ctx.fillText('Klasse 6 Gymnasium · A1 Level · Plymouth, England', 320, 460);
+ctx.textAlign='left';
+}
+// ── DRAWING: WIN ──────────────────────────────────────────────
+function drawWin() {
+ctx.fillStyle='rgba(0,20,60,0.95)';
+ctx.fillRect(0,0,640,480);
+ctx.textAlign='center';
+ctx.fillStyle='#FFE066'; ctx.font='bold 40px sans-serif';
+ctx.fillText('🌟 Well done, Silky! 🌟', 320, 120);
+ctx.fillStyle='white'; ctx.font='22px sans-serif';
+ctx.fillText('You completed Plymouth Beach!', 320, 170);
+ctx.fillStyle='#FFE066'; ctx.font='bold 30px sans-serif';
+ctx.fillText('⭐ Stars collected: '+player.stars, 320, 230);
+ctx.fillStyle='#87CEEB'; ctx.font='16px sans-serif';
+ctx.fillText('You practised:', 320, 280);
+const topics = ['✅ To Be (am/is/are)','✅ Simple Present (-s/-es)','✅ Have / Has','✅ There is / There are','✅ Present Progressive (-ing)'];
+topics.forEach((t,i) => {
+ctx.fillStyle='#2ECC71'; ctx.font='15px sans-serif';
+ctx.fillText(t, 320, 305+i*24);
+});
+if (Math.floor(frame/35)%2===0) {
+ctx.fillStyle='white'; ctx.font='bold 16px sans-serif';
+ctx.fillText('Click to play again', 320, 460);
+}
+ctx.textAlign='left';
+}
+// ── GAME LOGIC ────────────────────────────────────────────────
+function startGame() {
+state = STATE.PLAYING;
+}
+function resetGame() {
+player.x=10TILE_SIZE+16; player.y=7TILE_SIZE+16;
+player.stars=0; player.hearts=3;
+npcs.forEach(n=>n.done=false);
+localStorage.setItem('silkyStars','0');
+state=STATE.MENU;
+}
+function tryTalkToNPC() {
+for (const npc of npcs) {
+if (npc.done) continue;
+const dist = Math.hypot(player.x-npc.x, player.y-npc.y);
+if (dist < 52) {
+activeNPC = npc;
+dlgPhase = 0;
+dlgPage = 0;
+quizIndex = 0;
+quizResult= null;
+quizEarned= 0;
+state = STATE.DIALOGUE;
+return;
+}
+}
+}
+function advanceDialogue() {
+if (dlgPhase===0) { dlgPhase=1; }
+else if (dlgPhase===1) {
+dlgPhase=2;
+quizIndex=0; quizResult=null;
+state=STATE.QUIZ;
+}
+}
+function selectAnswer(i) {
+if (!activeNPC||quizResult!==null) return;
+const q = activeNPC.questions[quizIndex];
+if (i===q.ans) {
+quizResult='correct';
+player.stars+=10;
+quizEarned+=10;
+localStorage.setItem('silkyStars',player.stars);
+} else {
+quizResult='wrong';
+}
+quizExp = q.exp;
+quizFlash=20;
+}
+function nextQuizStep() {
+quizResult=null;
+quizIndex++;
+if (quizIndex>=activeNPC.questions.length) {
+// quiz done
+activeNPC.done=true;
+const allDone = npcs.every(n=>n.done);
+activeNPC=null;
+state = allDone ? STATE.WIN : STATE.PLAYING;
+}
+}
+// ── MAIN LOOP ─────────────────────────────────────────────────
+function update() {
+frame++;
+waterPulse += 0.04;
+lighthouseAngle += 0.012;
+seagulls.forEach(sg => { sg.x+=sg.spd; if(sg.x>660) sg.x=-20; });
+clouds.forEach(cl => { cl.x+=cl.spd; if(cl.x>700) cl.x=-120; });
+if (state===STATE.PLAYING) {
+movePlayer();
+updateCamera(player.x, player.y);
+if (justPressedE) tryTalkToNPC();
+}
+if (state===STATE.DIALOGUE && justPressedE) advanceDialogue();
+if (state===STATE.QUIZ && justPressedE && quizResult!==null) nextQuizStep();
+if (state===STATE.MENU && justPressedEnter) startGame();
+justPressedE=false; justPressedEnter=false;
+}
+function draw() {
+ctx.clearRect(0,0,640,480);
+if (state===STATE.MENU) { drawMenu(); return; }
+if (state===STATE.WIN) { drawWin(); return; }
+// sky background
+const skyGrad = ctx.createLinearGradient(0,0,0,480);
+skyGrad.addColorStop(0,'#87CEEB');
+skyGrad.addColorStop(0.4,'#B0E0FF');
+skyGrad.addColorStop(1,'#F4D03F');
+ctx.fillStyle=skyGrad; ctx.fillRect(0,0,640,480);
+drawDecorations();
+drawMap();
+drawLighthouse();
+// draw NPCs
+npcs.forEach(drawNPC);
+// draw player
+const sx = player.x - cam.x;
+const sy = player.y - cam.y;
+drawSilky(sx, sy);
+drawHUD();
+if (state===STATE.DIALOGUE) drawDialogueBox();
+if (state===STATE.QUIZ) drawQuiz();
+// quiz flash overlay
+if (quizFlash>0) {
+const col = quizResult==='correct' ? 'rgba(46,204,113,' : 'rgba(231,76,60,';
+ctx.fillStyle=col+(quizFlash/20*0.3)+')';
+ctx.fillRect(0,0,640,480);
+quizFlash--;
+}
+}
+function loop() {
+update();
+draw();
+requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
